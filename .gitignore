@@ -1,0 +1,40 @@
+# Dependencies
+node_modules/
+.pio
+
+# Build outputs
+.next/
+out/
+dist/
+build/
+
+# Environment secrets
+.env
+.env.local
+.env.*.local
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+
+# Python
+__pycache__/
+*.pyc
+.env
+venv/
+
+# Misc
+.cache/
+*.tgz
+*.tar.xz
