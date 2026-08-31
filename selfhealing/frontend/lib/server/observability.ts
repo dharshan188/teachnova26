@@ -379,7 +379,10 @@ export async function computeOverview(): Promise<Overview> {
   const [activeIncidents, warnCount, errorCount, findings, components] =
     await Promise.all([
       prisma.incident.findMany({
-        where: { status: { in: [...ACTIVE_STATUSES] } },
+        where: {
+          status: { in: [...ACTIVE_STATUSES] },
+          updatedAt: { gte: since },
+        },
         select: { severity: true, cyberSafetyImpact: true },
       }),
       prisma.logEvent.count({ where: { level: 'WARN', createdAt: { gte: since } } }),
