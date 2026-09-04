@@ -11,6 +11,7 @@ import type {
   IncidentDetailDTO,
 } from '@/lib/api/observability'
 import { useAsync } from '@/lib/hooks'
+import { subscribeSecurityEvents } from '@/lib/api/security'
 import {
   Card,
   CardHeader,
@@ -42,15 +43,41 @@ export function IncidentDetailClient({ id }: { id: string }) {
       incident.status,
     )
 
-  // Live polling while a repair is in flight so the conversation transcript
-  // updates as rounds land.
+  // Live refresh: the SSE lifecycle stream drives immediate refetches as agent
+  // runs / repairs land for this incident, with a polling fallback so the detail
+  // still updates even if the stream is unavailable. Both stop once the incident
+  // reaches a terminal state.
   useEffect(() => {
     if (!isActive) return
-    const interval = setInterval(() => {
-      refetch()
-    }, 4000)
-    return () => clearInterval(interval)
-  }, [isActive, refetch])
+    let closed = false
+
+    const refresh = () => {
+      if (!closed) refetch()
+    }
+
+    const interval = setInterval(refresh, 4000)
+
+    const unsubscribe = subscribeSecurityEvents({
+      onSnapshot: () => {},
+      onDelivery: () => {},
+      onLifecycle: (payload) => {
+        const touched =
+          payload.incidents.some((i) => i.id === id) ||
+          payload.events.some((e) => e.incidentId === id) ||
+          payload.agentRuns.some((r) => r.incidentId === id) ||
+          payload.repairs.some((r) => r.incidentId === id) ||
+          payload.approvals.some((a) => a.incidentId === id)
+        if (touched) refresh()
+      },
+      onError: () => {},
+    })
+
+    return () => {
+      closed = true
+      clearInterval(interval)
+      unsubscribe()
+    }
+  }, [isActive, refetch, id])
 
   const handleDownload = async () => {
     setDownloading(true)

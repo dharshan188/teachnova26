@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 
 import { cn } from '@/lib/cn'
@@ -34,7 +34,6 @@ import {
   Pill,
   ProgressBar,
   StatCard,
-  fullStamp,
   levelTone,
   relativeTime,
   riskColor,
@@ -274,6 +273,19 @@ export function OverviewClient() {
   const [lifecycleFeed, setLifecycleFeed] = useState<LifecycleFeedItem[]>([])
   const [lifecycleLive, setLifecycleLive] = useState<'connecting' | 'live' | 'error'>('connecting')
 
+  // Debounced live refresh: coalesces a burst of lifecycle diffs into a single
+  // refetch so the dashboard stays responsive and we never hammer the API.
+  const liveRefreshRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const scheduleLiveRefresh = () => {
+    if (liveRefreshRef.current) clearTimeout(liveRefreshRef.current)
+    liveRefreshRef.current = setTimeout(() => {
+      void load()
+    }, 400)
+  }
+  useEffect(() => () => {
+    if (liveRefreshRef.current) clearTimeout(liveRefreshRef.current)
+  }, [])
+
   const load = async () => {
     try {
       const [summaryData, incidentData] = await Promise.all([
@@ -337,6 +349,12 @@ export function OverviewClient() {
       onLifecycle: (payload) => {
         setLifecycleFeed((prev) => appendLifecycle(prev, payload))
         setLifecycleLive('live')
+        // A lifecycle diff means real backend state changed (incident,
+        // agent run, approval or repair). Refresh the live dashboard state
+        // immediately so the UI tracks the pipeline without waiting for the
+        // polling fallback interval. The refetch pulls the freshest DB state,
+        // so a newer SSE update can never be overwritten by an older poll.
+        scheduleLiveRefresh()
       },
       onError: () => {
         setTelegramLive('error')
@@ -368,9 +386,11 @@ export function OverviewClient() {
           </p>
           <h1 className="mt-1 text-2xl font-bold tracking-tight text-bh-ink">Overview</h1>
           <p className="mt-1 text-sm text-bh-muted">
-            {lastUpdated
-              ? `Refreshed ${fullStamp(lastUpdated.toISOString())} · auto every ${REFRESH_MS / 1000}s`
-              : 'Live telemetry'}
+            {lifecycleLive === 'live'
+              ? 'Live via SSE — updates as incidents and repairs happen'
+              : lastUpdated
+                ? `Auto-refreshing every ${REFRESH_MS / 1000}s (SSE stream unavailable)`
+                : 'Live telemetry'}
           </p>
         </div>
         <LiveBadge />

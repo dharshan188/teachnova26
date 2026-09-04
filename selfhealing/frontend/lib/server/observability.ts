@@ -62,11 +62,76 @@ export const SEVERITY_CYBER_IMPACT: Record<string, number> = {
   CRITICAL: 8,
 }
 
-const WARN_PENALTY_CAP = 15
-const ERROR_PENALTY_UNIT = 2
-const ERROR_PENALTY_CAP = 20
-const SECURITY_PENALTY_UNIT = 5
-const SECURITY_PENALTY_CAP = 15
+// --- Deterministic demo risk/health/cyber policy ---------------------------
+// Drives the Command Center gauges from the CURRENTLY ACTIVE incident set so
+// the demo reflects live state, never stale/historical incidents:
+//   NORMAL / RESOLVED          → risk 0 · health 100 · cyber 100
+//   MEDIUM active              → risk 30 · health 30  · cyber degraded
+//   HIGH active                → risk 50 · health 55  · cyber degraded
+// The highest active severity wins (consistent when several are active).
+// These are NOT hard-coded per incident; they are selected by the actual
+// severity present in the active incident rows.
+const DEMO_RISK_BY_SEVERITY: Record<string, number> = {
+  NONE: 0,
+  LOW: 15,
+  MEDIUM: 30,
+  HIGH: 50,
+  CRITICAL: 60,
+}
+const DEMO_HEALTH_BY_SEVERITY: Record<string, number> = {
+  NONE: 100,
+  LOW: 85,
+  MEDIUM: 30,
+  HIGH: 55,
+  CRITICAL: 20,
+}
+// Cyber Safety remains its own axis: it degrades while an incident is active
+// and recovers once resolved. It is deliberately NOT copied from Risk Score.
+const DEMO_CYBER_BY_SEVERITY: Record<string, number> = {
+  NONE: 100,
+  LOW: 95,
+  MEDIUM: 60,
+  HIGH: 40,
+  CRITICAL: 20,
+}
+
+export interface DemoPolicyScores {
+  riskScore: number
+  cyberSafetyScore: number
+  systemHealth: number
+}
+
+// Derives the deterministic dashboard scores from the severities actually
+// present in the active incident set. Returns NORMAL (0/100/100) when none.
+export function demoPolicyScores(incidents: { severity: string }[]): DemoPolicyScores {
+  let maxSeverity: string = 'NONE'
+  for (const incident of incidents) {
+    const sev: string = incident.severity ?? 'LOW'
+    if (severityRank(sev) > severityRank(maxSeverity)) maxSeverity = sev
+  }
+  return {
+    riskScore: DEMO_RISK_BY_SEVERITY[maxSeverity] ?? 0,
+    cyberSafetyScore: DEMO_CYBER_BY_SEVERITY[maxSeverity] ?? 100,
+    systemHealth: DEMO_HEALTH_BY_SEVERITY[maxSeverity] ?? 100,
+  }
+}
+
+function severityRank(severity: string): number {
+  switch (severity) {
+    case 'NONE':
+      return 0
+    case 'LOW':
+      return 1
+    case 'MEDIUM':
+      return 2
+    case 'HIGH':
+      return 3
+    case 'CRITICAL':
+      return 4
+    default:
+      return 0
+  }
+}
 
 // --- Security observation thresholds (Phase 7 observes; Phase 8 mitigates) --
 const AUTH_FAILURE_MIN = 3
@@ -110,10 +175,6 @@ export interface Overview {
   cyberSafetyScore: number
   systemHealth: number
   activeIncidents: number
-}
-
-function clamp(value: number, min: number, max: number): number {
-  return Math.min(max, Math.max(min, value))
 }
 
 function weightOfStatus(status: ComponentStatus): number {
@@ -376,48 +437,27 @@ export async function detectSecurityFindings(): Promise<SecurityFinding[]> {
 export async function computeOverview(): Promise<Overview> {
   const since = new Date(Date.now() - OBSERVABILITY_WINDOW_MS)
 
-  const [activeIncidents, warnCount, errorCount, findings, components] =
-    await Promise.all([
-      prisma.incident.findMany({
-        where: {
-          status: { in: [...ACTIVE_STATUSES] },
-          updatedAt: { gte: since },
-        },
-        select: { severity: true, cyberSafetyImpact: true },
-      }),
-      prisma.logEvent.count({ where: { level: 'WARN', createdAt: { gte: since } } }),
-      prisma.logEvent.count({ where: { level: 'ERROR', createdAt: { gte: since } } }),
-      detectSecurityFindings(),
-      computeComponentsHealth(),
-    ])
+  const [activeIncidents, components] = await Promise.all([
+    prisma.incident.findMany({
+      where: {
+        status: { in: [...ACTIVE_STATUSES] },
+        updatedAt: { gte: since },
+      },
+      select: { severity: true, cyberSafetyImpact: true },
+    }),
+    computeComponentsHealth(),
+  ])
 
-  const activeBase = activeIncidents.reduce(
-    (sum, incident) => sum + (SEVERITY_RISK_WEIGHTS[incident.severity] ?? 0),
-    0,
-  )
-  const cyberImpact = activeIncidents.reduce(
-    (sum, incident) => sum + incident.cyberSafetyImpact,
-    0,
-  )
-
-  const warnPenalty = Math.min(WARN_PENALTY_CAP, warnCount)
-  const errorPenalty = Math.min(ERROR_PENALTY_CAP, errorCount * ERROR_PENALTY_UNIT)
-  const securityPenalty = Math.min(
-    SECURITY_PENALTY_CAP,
-    findings.length * SECURITY_PENALTY_UNIT,
-  )
-
-  const riskScore = clamp(
-    Math.round(activeBase + warnPenalty + errorPenalty + securityPenalty),
-    0,
-    100,
-  )
-  const cyberSafetyScore = clamp(Math.round(100 - cyberImpact), 0, 100)
+  const demo = demoPolicyScores(activeIncidents)
+  // Health still reports the real component health when NORMAL; while an
+  // incident is active the deterministic demo policy reflects the live state.
+  const systemHealth =
+    activeIncidents.length === 0 ? computeSystemHealth(components) : demo.systemHealth
 
   return {
-    riskScore,
-    cyberSafetyScore,
-    systemHealth: computeSystemHealth(components),
+    riskScore: demo.riskScore,
+    cyberSafetyScore: demo.cyberSafetyScore,
+    systemHealth,
     activeIncidents: activeIncidents.length,
   }
 }

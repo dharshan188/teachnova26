@@ -1,0 +1,207 @@
+@import "tailwindcss";
+
+@theme inline {
+  --color-background: var(--bh-bg);
+  --color-foreground: var(--bh-ink);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+
+  --color-bh-bg: var(--bh-bg);
+  --color-bh-surface: var(--bh-surface);
+  --color-bh-surface-2: var(--bh-surface-2);
+  --color-bh-ink: var(--bh-ink);
+  --color-bh-muted: var(--bh-muted);
+  --color-bh-faint: var(--bh-faint);
+  --color-bh-line: var(--bh-line);
+  --color-bh-accent: var(--bh-accent);
+  --color-bh-accent-strong: var(--bh-accent-strong);
+  --color-bh-accent-soft: var(--bh-accent-soft);
+  --color-bh-accent-ink: var(--bh-accent-ink);
+  --color-bh-info: var(--bh-info);
+  --color-bh-success: var(--bh-success);
+  --color-bh-warning: var(--bh-warning);
+  --color-bh-danger: var(--bh-danger);
+}
+
+:root {
+  /* "Engineer's workspace" — crisp neutral base with a constructive flame-amber accent */
+  --bh-bg: #fafafa;
+  --bh-surface: #ffffff;
+  --bh-surface-2: #f4f4f5;
+  --bh-ink: #17171b;
+  --bh-muted: #5b5b66;
+  --bh-faint: #8a8a94;
+  --bh-line: #e6e6e9;
+  --bh-line-strong: #d4d4d9;
+
+  --bh-accent: #ea580c;
+  --bh-accent-strong: #c2410c;
+  --bh-accent-soft: #fff4ea;
+  --bh-accent-ink: #7c2d12;
+
+  --bh-info: #2563eb;
+  --bh-success: #16a34a;
+  --bh-warning: #d97706;
+  --bh-danger: #dc2626;
+
+  --bh-radius-sm: 0.375rem;
+  --bh-radius: 0.625rem;
+  --bh-radius-lg: 0.875rem;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bh-bg: #121215;
+    --bh-surface: #1a1a1e;
+    --bh-surface-2: #232327;
+    --bh-ink: #e8e8ea;
+    --bh-muted: #a1a1ab;
+    --bh-faint: #6f6f78;
+    --bh-line: #2b2b30;
+    --bh-line-strong: #3a3a41;
+
+    --bh-accent: #f97316;
+    --bh-accent-strong: #fb923c;
+    --bh-accent-soft: #2a1c10;
+    --bh-accent-ink: #ffd9bd;
+
+    --bh-info: #60a5fa;
+    --bh-success: #4ade80;
+    --bh-warning: #fbbf24;
+    --bh-danger: #f87171;
+  }
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
+
+body {
+  background: var(--bh-bg);
+  color: var(--bh-ink);
+  font-family: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Visible, consistent keyboard focus */
+:where(a, button, input, textarea, select, [tabindex]):focus-visible {
+  outline: 2px solid var(--bh-accent);
+  outline-offset: 2px;
+  border-radius: var(--bh-radius-sm);
+}
+
+/* Thin, unobtrusive scrollbars */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--bh-line-strong) transparent;
+}
+
+@keyframes modalIn {
+  from {
+    opacity: 0;
+    transform: translateY(12px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes slideInRight {
+  from {
+    opacity: 0;
+    transform: translateX(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+/* Faint blueprint grid used sparingly across construction-themed surfaces */
+.bh-grid-bg {
+  background-image:
+    linear-gradient(to right, color-mix(in srgb, var(--bh-ink) 5%, transparent) 1px, transparent 1px),
+    linear-gradient(to bottom, color-mix(in srgb, var(--bh-ink) 5%, transparent) 1px, transparent 1px);
+  background-size: 28px 28px;
+}
+
+/* ---------------------------------------------------------------------------
+ * Command Center (Phase 7) — "mission control" dark theme.
+ *
+ * The AI Command Center keeps its own always-dark palette regardless of the
+ * host app's light/dark preference, and intentionally replaces the app's
+ * flame-amber accent with a restrained cyan/teal interactive accent. Because
+ * every `bh-*` color utility resolves to `var(--bh-*)` at runtime, existing
+ * primitives (Button, Card, Badge) adapt automatically inside this scope.
+ * ------------------------------------------------------------------------- */
+.command-theme {
+  --bh-bg: #0b0d10;
+  --bh-surface: #12161b;
+  --bh-surface-2: #1a2027;
+  --bh-ink: #dfe7ef;
+  --bh-muted: #9aa8b6;
+  --bh-faint: #5e6a77;
+  --bh-line: #1e262e;
+  --bh-line-strong: #2c3844;
+
+  --bh-accent: #0ea7bb;
+  --bh-accent-strong: #11bfd4;
+  --bh-accent-soft: #0d2e35;
+  --bh-accent-ink: #8ae0ea;
+
+  --bh-info: #60a5fa;
+  --bh-success: #34d399;
+  --bh-warning: #fbbf24;
+  --bh-danger: #f87171;
+
+  background: var(--bh-bg);
+  color: var(--bh-ink);
+  color-scheme: dark;
+
+  background-image:
+    linear-gradient(to right, color-mix(in srgb, var(--bh-ink) 3.5%, transparent) 1px, transparent 1px),
+    linear-gradient(to bottom, color-mix(in srgb, var(--bh-ink) 3.5%, transparent) 1px, transparent 1px);
+  background-size: 32px 32px;
+}
+
+.command-theme ::selection {
+  background: color-mix(in srgb, var(--bh-accent) 45%, transparent);
+}
+
+@keyframes tickerScroll {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.command-ticker-row {
+  animation: tickerScroll 0.35s ease-out both;
+}

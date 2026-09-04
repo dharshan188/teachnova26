@@ -1,0 +1,510 @@
+// BuildHub Prisma schema
+// Phase 2/3 scope: authentication (User, Session) and user profiles.
+// Phase 4/5 scope: posts and (single-owner) projects.
+// Phase 6 scope: social interactions (likes, comments).
+// Phase 7 scope: observability + monitoring (Incident, LogEvent, IncidentEvent,
+//            AgentRun [SIMULATION], Approval).
+// Phase 8 scope: security + attack detection (SecurityFinding from the Python
+//            log analyzer, real AgentRun mode="REAL" executions via Groq,
+//            TelegramNotification alert conduit). The roadmap scope is likes +
+//            comments + observability only (following/notifications/search are
+//            out of scope).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id           String    @id @default(cuid())
+  name         String
+  username     String    @unique
+  email        String    @unique
+  passwordHash String
+  avatar       String?
+  bio          String?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  sessions     Session[]
+  posts        Post[]
+  projects     Project[]
+  comments     Comment[]
+  likes        Like[]
+
+  @@map("users")
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  tokenHash String   @unique
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@map("sessions")
+}
+
+enum ProjectStatus {
+  ACTIVE
+  COMPLETED
+  ARCHIVED
+}
+
+model Post {
+  id        String    @id @default(cuid())
+  authorId  String
+  author    User      @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  content   String
+  projectId String?
+  project   Project?  @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  tags      String[]
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  comments  Comment[]
+  likes     Like[]
+
+  @@index([authorId])
+  @@index([projectId])
+  @@index([createdAt])
+  @@map("posts")
+}
+
+model Comment {
+  id        String   @id @default(cuid())
+  content   String
+  postId    String
+  post      Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
+  authorId  String
+  author    User     @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([postId])
+  @@index([authorId])
+  @@map("comments")
+}
+
+model Like {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  postId    String
+  post      Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@unique([userId, postId])
+  @@index([postId])
+  @@map("likes")
+}
+
+model Project {
+  id          String        @id @default(cuid())
+  ownerId     String
+  owner       User          @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  name        String
+  slug        String        @unique
+  description String?
+  tags        String[]
+  status      ProjectStatus @default(ACTIVE)
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  posts       Post[]
+
+  @@index([ownerId])
+  @@map("projects")
+}
+
+// ---------------------------------------------------------------------------
+// Phase 7 — Observability + Monitoring
+// ---------------------------------------------------------------------------
+
+enum IncidentSeverity {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum IncidentStatus {
+  DETECTED
+  INVESTIGATING
+  AWAITING_REVIEW
+  WAITING_APPROVAL
+  VALIDATING
+  RESOLVED
+  ROLLED_BACK
+  AI_REPAIR_FAILED
+}
+
+enum LogLevel {
+  INFO
+  WARN
+  ERROR
+  SECURITY
+}
+
+enum AgentName {
+  FIXER
+  CRITIC
+  JUDGE
+  CODER
+}
+
+enum AgentStatus {
+  QUEUED
+  ANALYZING
+  GENERATING
+  WAITING
+  REVIEWING
+  COMPLETE
+  REJECTED
+  FAILED
+}
+
+enum ApprovalDecision {
+  APPROVED
+  REJECTED
+}
+
+enum ApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  EXPIRED
+  CONSUMED
+}
+
+// — Phase 8 — security finding lifecycle. Rows are written by the Python
+// security log analyzer (via POST /api/security/findings), correlated and
+// deduplicated by fingerprint server-side.
+enum FindingStatus {
+  DETECTED
+  PROCESSED
+  DISMISSED
+}
+
+// — Phase 8 — Telegram message delivery state.
+enum DeliveryStatus {
+  QUEUED
+  SENT
+  FAILED
+}
+
+// — Phase 8 — telegram subject type.
+enum NotificationType {
+  INCIDENT
+  ESCALATION
+  TEST
+  HIGH_RISK_APPROVAL_REQUIRED
+  REPAIR_APPLIED
+  REPAIR_FAILED
+  ROLLBACK_COMPLETED
+  RECOVERY
+}
+
+model SecurityFinding {
+  id          String          @id @default(cuid())
+  // Stable key for the same logical finding across analyzer runs. Next.js owns
+  // correlation: analyser output → rule → window → severity → fingerprint.
+  fingerprint String          @unique
+  ruleId      String
+  title       String
+  severity    IncidentSeverity
+  endpoint    String?
+  method      String?
+  detail      String?
+  signal      Json?
+  status      FindingStatus   @default(DETECTED)
+  hitCount    Int             @default(1)
+  firstSeenAt DateTime        @default(now())
+  lastSeenAt  DateTime        @default(now())
+  createdAt   DateTime        @default(now())
+
+  @@index([status])
+  @@index([ruleId])
+  @@index([createdAt])
+  @@map("security_findings")
+}
+
+model TelegramNotification {
+  id                String          @id @default(cuid())
+  incidentId        String?
+  incident          Incident?       @relation(fields: [incidentId], references: [id], onDelete: SetNull)
+  type              NotificationType @default(INCIDENT)
+  severity          IncidentSeverity?
+  chatId            String
+  message           String
+  deliveryStatus    DeliveryStatus  @default(SENT)
+  telegramMessageId String?
+  error             String?
+  createdAt         DateTime        @default(now())
+  lastSentAt        DateTime?
+
+  @@unique([incidentId, type])
+  @@index([incidentId])
+  @@index([deliveryStatus])
+  @@map("telegram_notifications")
+}
+
+model Incident {
+  id                String           @id @default(cuid())
+  // Deterministic, human-facing reference (INC-00021).
+  ref               String           @unique
+  status            IncidentStatus   @default(DETECTED)
+  severity          IncidentSeverity
+  // Deterministic operational risk (0-100) recorded when the incident opened.
+  riskScore         Int
+  // Contribution to the cyber-safety score (0-100) while the incident is active.
+  cyberSafetyImpact Int
+  title             String
+  description       String
+  summary           String?
+  endpoint          String
+  method            String
+  requestId         String?
+  errorCode         String?
+  expectedRootCause String?
+  detectedBy        String?
+  // Internal sandbox bookkeeping (e.g. faultId + defect context for the
+  // deterministic validation engine). NEVER rendered to the AI agents.
+  metadata          Json?
+  resolvedAt        DateTime?
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+  logs              LogEvent[]
+  events            IncidentEvent[]
+  agentRuns         AgentRun[]
+  approvals         Approval[]
+  repairAttempts    RepairAttempt[]
+  patchRecords      PatchRecord[]
+  repairMemory      RepairMemory?
+  repairExperiences RepairExperience[]
+  telegramNotifications TelegramNotification[]
+
+  @@index([status])
+  @@index([severity])
+  @@index([createdAt])
+  @@map("incidents")
+}
+
+// Timeline entries recorded for an incident (request → error → created →
+// context → AI queue → human review). Stages are observability facts, not AI.
+model IncidentEvent {
+  id         String    @id @default(cuid())
+  incidentId String
+  incident   Incident  @relation(fields: [incidentId], references: [id], onDelete: Cascade)
+  stage      String
+  label      String
+  detail     String?
+  at         DateTime  @default(now())
+
+  @@index([incidentId])
+  @@map("incident_events")
+}
+
+/// Triggered by the real Phase 8 AI pipeline on demand (mode="REAL",
+/// @model + Groq models) or by the legacy seeded Phase 7 demo data (mode
+/// "SIMULATION"). A REAL run that surfaces an infrastructure/API failure is
+/// recorded as FAILED with model/aggregated evidence logged; candidates are
+/// text-only for human review — never auto-applied.
+model AgentRun {
+  id              String      @id @default(cuid())
+  incidentId      String
+  incident        Incident    @relation(fields: [incidentId], references: [id], onDelete: Cascade)
+  agent           AgentName
+  role            String
+  status          AgentStatus
+  progress        Int         @default(0)
+  currentActivity String?
+  inputSummary    String?
+  outputSummary   String?
+  confidence      Int?
+  mode            String      @default("SIMULATION")
+  model           String?
+  output          Json?
+  error           String?
+  // Phase 9 upgrade: iterative Coder/Critic conversation metadata.
+  round           Int         @default(1)
+  kind            String?
+  durationMs      Int?
+  promptTokens    Int?
+  completionTokens Int?
+  context         Json?
+  completedAt     DateTime?
+  createdAt       DateTime    @default(now())
+
+  @@index([incidentId])
+  @@index([round])
+  @@map("agent_runs")
+}
+
+// Human approval history. Phase 9 adds code-patch approval with unique IDs,
+// expiration, and explicit state machine.
+model Approval {
+  id              String        @id @default(cuid())
+  incidentId      String
+  incident        Incident      @relation(fields: [incidentId], references: [id], onDelete: Cascade)
+  approvalId      String        @unique
+  patchId         String
+  status          ApprovalStatus @default(PENDING)
+  operator        String
+  createdAt       DateTime      @default(now())
+  expiresAt       DateTime
+  statusUpdatedAt DateTime      @updatedAt
+  repairAttemptId String?
+  repairAttempt   RepairAttempt? @relation(fields: [repairAttemptId], references: [id], onDelete: SetNull)
+
+  @@index([incidentId])
+  @@index([approvalId])
+  @@index([status])
+  @@index([repairAttemptId])
+  @@map("approvals")
+}
+
+// Persistent structured log events (dev/demo architecture — a bounded staging
+// table, not a full production log store).
+model LogEvent {
+  id         String     @id @default(cuid())
+  level      LogLevel
+  service    String
+  message    String
+  route      String?
+  method     String?
+  status     Int?
+  requestId  String?
+  errorCode  String?
+  incidentId String?
+  incident   Incident?  @relation(fields: [incidentId], references: [id], onDelete: SetNull)
+  createdAt  DateTime   @default(now())
+
+  @@index([level])
+  @@index([service])
+  @@index([route])
+  @@index([createdAt])
+  @@index([requestId])
+  @@map("log_events")
+}
+
+// ---------------------------------------------------------------------------
+// Phase 9 upgrade — iterative multi-agent repair lifecycle.
+// A RepairAttempt is ONE full run of the self-healing pipeline for an incident
+// (detect → context → coder/critic conversation → judge → risk → patch →
+// approval → apply → validate → resolved/rolled-back). The status field carries
+// the live pipeline stage so the dashboard can render real-time transitions.
+// ---------------------------------------------------------------------------
+model RepairAttempt {
+  id             String   @id @default(cuid())
+  attemptId      String   @unique
+  incidentId     String
+  incident       Incident @relation(fields: [incidentId], references: [id], onDelete: Cascade)
+  status         String
+  risk           String?
+  riskReason     String?
+  model          String?
+  summary        String?
+  error          String?
+  patchState     Json?
+  startedAt      DateTime @default(now())
+  completedAt    DateTime?
+  approvals      Approval[]
+  patches        PatchRecord[]
+  repairExperiences RepairExperience[]
+
+  @@index([incidentId])
+  @@index([status])
+  @@index([attemptId])
+  @@map("repair_attempts")
+}
+
+// Deterministic patch records: every AI-proposed patch is verified against the
+// real file, checkpointed, applied, validated, and rolled back if validation
+// fails. This is the audit trail for patch safety + universal rollback.
+model PatchRecord {
+  id               String    @id @default(cuid())
+  incidentId       String
+  incident         Incident  @relation(fields: [incidentId], references: [id], onDelete: Cascade)
+  repairAttemptId  String?
+  repairAttempt    RepairAttempt? @relation(fields: [repairAttemptId], references: [id], onDelete: SetNull)
+  patchId          String
+  file             String
+  line             Int?
+  function         String?
+  status           String    @default("CHECKPOINTED")
+  originalContent  String?
+  appliedContent   String?
+  risk             String?
+  requiresApproval Boolean   @default(false)
+  approvalId       String?
+  validationResult String?
+  appliedAt        DateTime?
+  rolledBackAt     DateTime?
+  validatedAt      DateTime?
+  createdAt        DateTime  @default(now())
+
+  @@index([incidentId])
+  @@index([repairAttemptId])
+  @@index([patchId])
+  @@map("patch_records")
+}
+
+// ---------------------------------------------------------------------------
+// Phase 10 — repair memory + learning foundation.
+// ---------------------------------------------------------------------------
+
+// Historical repair outcome. Context for future repairs — never auto-applied.
+model RepairMemory {
+  id              String   @id @default(cuid())
+  incidentId      String   @unique
+  incident        Incident @relation(fields: [incidentId], references: [id], onDelete: Cascade)
+  errorSignature  String
+  stackTrace      String?
+  file            String?
+  feature         String?
+  endpoint        String?
+  rootCause       String?
+  patchSummary    String?
+  risk            String?
+  outcome         String
+  humanDecision   String?
+  humanReason     String?
+  reward          Int      @default(0)
+  recurrenceCount Int      @default(0)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  experiences     RepairExperience[]
+
+  @@index([errorSignature])
+  @@index([file])
+  @@index([endpoint])
+  @@index([outcome])
+  @@map("repair_memories")
+}
+
+// Normalized RL-ready experience record (state/action/reward/nextState/terminal).
+// This is training-data infrastructure, not a trained policy.
+model RepairExperience {
+  id          String          @id @default(cuid())
+  incidentId  String
+  incident    Incident        @relation(fields: [incidentId], references: [id], onDelete: Cascade)
+  memoryId    String?
+  memory      RepairMemory?   @relation(fields: [memoryId], references: [id], onDelete: SetNull)
+  attemptId   String?
+  attempt     RepairAttempt?  @relation(fields: [attemptId], references: [id], onDelete: SetNull)
+  state       Json
+  action      Json
+  reward      Int             @default(0)
+  nextState   Json?
+  terminal    Boolean         @default(false)
+  outcome     String?
+  humanDecision String?
+  createdAt   DateTime        @default(now())
+
+  @@index([incidentId])
+  @@index([terminal])
+  @@map("repair_experiences")
+}

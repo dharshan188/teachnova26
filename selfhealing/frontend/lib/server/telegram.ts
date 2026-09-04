@@ -158,11 +158,58 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
-async function deliverMessage(
+// Telegram's sendMessage `text` is hard-capped at 4096 characters. We send at
+// most TELEGRAM_MSG_LIMIT characters per part (a small buffer under the cap so
+// HTML entities such as &lt; that expand on the wire never exceed it). A part
+// must never drop a trailing section, so long messages are split into separate
+// messages at section (newline) boundaries instead of being hard-sliced.
+const TELEGRAM_MSG_LIMIT = 4000
+
+function preTagsBalanced(section: string): boolean {
+  const opens = (section.match(/<pre>/g) ?? []).length
+  const closes = (section.match(/<\/pre>/g) ?? []).length
+  const codeOpens = (section.match(/<code>/g) ?? []).length
+  const codeCloses = (section.match(/<\/code>/g) ?? []).length
+  return opens === closes && codeOpens === codeCloses
+}
+
+function splitTelegramText(text: string, max = TELEGRAM_MSG_LIMIT): string[] {
+  if (text.length <= max) return [text]
+  const parts: string[] = []
+  let rest = text
+  while (rest.length > max) {
+    let cut = -1
+    const earliest = Math.floor(max / 2)
+    const latest = max
+    for (let i = latest; i > earliest; i -= 1) {
+      if (rest[i] === '\n' && preTagsBalanced(rest.slice(0, i))) {
+        cut = i
+        break
+      }
+    }
+    if (cut === -1) {
+      // No safe section break: hard-cut at max, then back off so we never
+      // split a lone <pre>/<code> (which would break HTML parse_mode).
+      const hard = max
+      if (preTagsBalanced(rest.slice(0, hard))) {
+        cut = hard
+      } else {
+        const tagStart = rest.slice(0, hard).lastIndexOf('<')
+        cut = tagStart > earliest ? tagStart : hard
+      }
+    }
+    parts.push(rest.slice(0, cut).replace(/\s+$/, ''))
+    rest = rest.slice(cut).replace(/^\s+/, '')
+  }
+  if (rest.length > 0) parts.push(rest)
+  return parts
+}
+
+async function sendSingleMessage(
   token: string,
   chatId: string,
   text: string,
-): Promise<{ ok: boolean; telegramMessageId: string | null; error: string | null }> {
+): Promise<TelegramApiResult | null> {
   let last: TelegramApiResult | null = null
   for (let attempt = 1; attempt <= MAX_SEND_ATTEMPTS; attempt += 1) {
     last = await telegramApiRequest(
@@ -171,30 +218,53 @@ async function deliverMessage(
       '/sendMessage',
       {
         chat_id: chatId,
-        text: text.slice(0, 4000),
+        text,
         parse_mode: 'HTML',
         disable_web_page_preview: true,
       },
       API_TIMEOUT_MS,
     )
-    if (last.ok) {
-      return {
-        ok: true,
-        telegramMessageId: last.data?.result?.message_id != null ? String(last.data.result.message_id) : null,
-        error: null,
-      }
-    }
+    if (last.ok) break
     if (!isRetryable(last) || attempt === MAX_SEND_ATTEMPTS) break
     await delay(RETRY_BASE_MS * attempt)
   }
+  return last
+}
 
-  const rawError =
-    last?.error ??
-    (last?.data?.description ? `Telegram API ${last.statusCode}: ${last.data.description}` : `Telegram API ${last?.statusCode ?? 'unknown'}`)
-  const sanitized = tokenRejected(rawError)
-    ? 'Telegram bot token rejected by the API.'
-    : rawError.slice(0, 300)
-  return { ok: false, telegramMessageId: null, error: sanitized }
+async function deliverMessage(
+  token: string,
+  chatId: string,
+  text: string,
+): Promise<{ ok: boolean; telegramMessageId: string | null; error: string | null }> {
+  const parts = splitTelegramText(text)
+  let firstId: string | null = null
+  let lastError: string | null = null
+
+  for (const part of parts) {
+    const last = await sendSingleMessage(token, chatId, part)
+    if (last === null) {
+      lastError = 'Telegram request failed'
+      break
+    }
+    if (last.ok) {
+      if (firstId === null && last.data?.result?.message_id != null) {
+        firstId = String(last.data.result.message_id)
+      }
+      continue
+    }
+    const rawError =
+      last.error ??
+      (last.data?.description ? `Telegram API ${last.statusCode}: ${last.data.description}` : `Telegram API ${last?.statusCode ?? 'unknown'}`)
+    lastError = tokenRejected(rawError)
+      ? 'Telegram bot token rejected by the API.'
+      : rawError.slice(0, 300)
+    break
+  }
+
+  if (lastError === null && parts.length > 0) {
+    return { ok: true, telegramMessageId: firstId, error: null }
+  }
+  return { ok: false, telegramMessageId: firstId ?? null, error: lastError }
 }
 
 function tokenRejected(rawError: string): boolean {
@@ -223,7 +293,7 @@ async function recordDelivery(
       type,
       severity,
       chatId,
-      message: message.slice(0, 2000),
+      message,
       deliveryStatus,
       telegramMessageId,
       error: error?.slice(0, 500) ?? null,

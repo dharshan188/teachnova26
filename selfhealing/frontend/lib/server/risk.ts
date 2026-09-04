@@ -8,6 +8,7 @@ import {
   SEVERITY_RISK_WEIGHTS,
   computeComponentsHealth,
   computeSystemHealth,
+  demoPolicyScores,
 } from './observability'
 import type { FindingStatus, IncidentSeverity } from '@prisma/client'
 
@@ -18,12 +19,6 @@ import type { FindingStatus, IncidentSeverity } from '@prisma/client'
 // pressure term is derived from REAL SecurityFinding rows (the Python analyzer
 // pipeline) instead of the phase-7 in-memory heuristic. Everything is a pure
 // function of persisted state.
-
-const WARN_PENALTY_CAP = 15
-const ERROR_PENALTY_UNIT = 2
-const ERROR_PENALTY_CAP = 20
-const SECURITY_PENALTY_UNIT = 5
-const SECURITY_PENALTY_CAP = 15
 
 // Telegram routing tiers. These constants also drive the command-center banner:
 //   < 40  dashboard health only       (no push)
@@ -99,53 +94,34 @@ export interface SecurityOverview {
 export async function computeSecurityOverview(): Promise<SecurityOverview> {
   const since = new Date(Date.now() - OBSERVABILITY_WINDOW_MS)
 
-  const [activeIncidents, warnCount, errorCount, findings, components] =
-    await Promise.all([
-      prisma.incident.findMany({
-        where: {
-          status: { in: [...ACTIVE_STATUSES] },
-          updatedAt: { gte: since },
-        },
-        select: { severity: true, cyberSafetyImpact: true },
-      }),
-      prisma.logEvent.count({ where: { level: 'WARN', createdAt: { gte: since } } }),
-      prisma.logEvent.count({ where: { level: 'ERROR', createdAt: { gte: since } } }),
-      prisma.securityFinding.findMany({
-        where: { status: 'DETECTED' },
-        select: { severity: true },
-      }),
-      computeComponentsHealth(),
-    ])
-
-  const activeBase = activeIncidents.reduce(
-    (sum, incident) => sum + (SEVERITY_RISK_WEIGHTS[incident.severity] ?? 0),
-    0,
-  )
-  const cyberImpact = activeIncidents.reduce(
-    (sum, incident) => sum + incident.cyberSafetyImpact,
-    0,
-  )
-
-  const warnPenalty = Math.min(WARN_PENALTY_CAP, warnCount)
-  const errorPenalty = Math.min(ERROR_PENALTY_CAP, errorCount * ERROR_PENALTY_UNIT)
-  const securityPenalty = Math.min(
-    SECURITY_PENALTY_CAP,
-    findings.length * SECURITY_PENALTY_UNIT,
-  )
+  const [activeIncidents, findings, components] = await Promise.all([
+    prisma.incident.findMany({
+      where: {
+        status: { in: [...ACTIVE_STATUSES] },
+        updatedAt: { gte: since },
+      },
+      select: { severity: true, cyberSafetyImpact: true },
+    }),
+    prisma.securityFinding.findMany({
+      where: { status: 'DETECTED' },
+      select: { severity: true },
+    }),
+    computeComponentsHealth(),
+  ])
 
   const findingsBySeverity: Record<string, number> = {}
   for (const finding of findings) {
     findingsBySeverity[finding.severity] = (findingsBySeverity[finding.severity] ?? 0) + 1
   }
 
+  const demo = demoPolicyScores(activeIncidents)
+  const systemHealth =
+    activeIncidents.length === 0 ? computeSystemHealth(components) : demo.systemHealth
+
   return {
-    riskScore: clamp(
-      Math.round(activeBase + warnPenalty + errorPenalty + securityPenalty),
-      0,
-      100,
-    ),
-    cyberSafetyScore: clamp(Math.round(100 - cyberImpact), 0, 100),
-    systemHealth: computeSystemHealth(components),
+    riskScore: demo.riskScore,
+    cyberSafetyScore: demo.cyberSafetyScore,
+    systemHealth,
     activeIncidents: activeIncidents.length,
     activeFindings: findings.length,
     findingsBySeverity,

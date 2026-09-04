@@ -1,0 +1,100 @@
+"""Verify Telegram delivery + HIGH approval flow for BuildHub via browser."""
+import json, time
+import urllib.request
+from playwright.sync_api import sync_playwright
+
+BASE = "http://localhost:3000"
+RESULTS = {}
+
+
+def warmup():
+    try:
+        urllib.request.urlopen(f"{BASE}/login", timeout=60)
+    except Exception as e:
+        print(f"warmup note: {e}")
+
+
+def login(page, username="arjun", password="buildhub-demo1"):
+    warmup()
+    for attempt in range(3):
+        try:
+            page.goto(f"{BASE}/login", timeout=60000)
+            page.wait_for_load_state("networkidle")
+            break
+        except Exception as e:
+            print(f"login goto attempt {attempt+1} failed: {e}")
+            time.sleep(3)
+    page.fill("#identifier", username)
+    page.fill("#password", password)
+    page.get_by_role("button", name="Log in").click()
+    page.wait_for_url(lambda url: "/login" not in url, timeout=60000)
+    page.wait_for_load_state("networkidle")
+
+
+def api(page, path, method="GET", body=None):
+    body_expr = "undefined"
+    if body is not None:
+        body_expr = json.dumps(json.dumps(body))
+    js = f"""async () => {{
+      const res = await fetch('{path}', {{
+        method: '{method}',
+        headers: {{'Content-Type': 'application/json'}},
+        body: {body_expr}
+      }});
+      let data = null;
+      try {{ data = await res.json(); }} catch(e) {{ data = await res.text(); }}
+      return {{ status: res.status, data: data }};
+    }}"""
+    r = page.evaluate(js)
+    return r.get("status"), r.get("data")
+
+
+def main():
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        login(page)
+        print("logged in")
+
+        # ---- Verify telegram status (configured/reachable) ----
+        st, d = api(page, "/api/security/status")
+        tg = d.get("telegram", {})
+        print(f"TELEGRAM configured={tg.get('configured')} status={tg.get('status')}")
+
+        # ---- MEDIUM-01 Telegram test ----
+        # baseline: current sent count + latest incident SENT delivery
+        st2, d2 = api(page, "/api/security/status")
+        last = (d2.get("telegram") or {}).get("lastDelivery")
+        print(f"TELEGRAM lastDelivery BEFORE: {json.dumps(last)}")
+
+        # activate MEDIUM-01
+        f_st, f_d = api(page, "/api/faults", "POST", {"faultId": "MEDIUM-01", "action": "activate"})
+        ref = (f_d or {}).get("incident", {}).get("ref")
+        iid = (f_d or {}).get("incident", {}).get("id")
+        print(f"Activated MEDIUM-01 -> incident {ref} id={iid}")
+
+        # trigger the 500
+        api(page, "/api/posts", "POST", {"title": "tg trigger", "body": "x"})
+
+        # wait for telegram delivery (incident INCIDENT alert fires at creation)
+        print("Waiting 10s for Telegram delivery...")
+        time.sleep(10)
+
+        # Fetch the delivery record directly via status or the incident detail
+        st3, d3 = api(page, "/api/security/status")
+        last_now = (d3.get("telegram") or {}).get("lastDelivery")
+        print(f"TELEGRAM lastDelivery AFTER: {json.dumps(last_now)}")
+
+        # Get the delivery records for THIS incident from the DB via a known API
+        # Fetch incident detail to see telegram deliveries
+        if iid:
+            ist, idet = api(page, f"/api/incidents/{iid}")
+            deliveries = idet.get("telegram") or idet.get("deliveries") or []
+            print(f"INCIDENT {ref} telegram deliveries: {json.dumps(deliveries, default=str)[:600]}")
+
+        browser.close()
+        print("\nDONE")
+
+
+if __name__ == "__main__":
+    main()
